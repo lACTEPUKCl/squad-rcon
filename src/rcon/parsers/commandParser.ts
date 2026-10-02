@@ -15,10 +15,13 @@ export const commandParser = (
       break;
     case 'ShowCurrentMap':
       helpers.getCurrentMap(rconEmitter, data);
+      break;
     case 'ShowNextMap':
       helpers.getNextMap(rconEmitter, data);
+      break;
     case 'ShowServerInfo':
       helpers.getServerInfo(rconEmitter, data);
+      break;
     default:
       break;
   }

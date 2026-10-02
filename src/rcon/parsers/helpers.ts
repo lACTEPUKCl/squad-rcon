@@ -2,70 +2,111 @@ import EventEmitter from 'events';
 import { RconEvents } from '../../events';
 import { TMap, TPlayer, TServerInfo, TSquad } from '../../types';
 
-const getListPlayers = (rconEmitter: EventEmitter, body: string) => {
+const ids = (text: string) => ({
+  eosID: text.match(/\bEOS:\s*([a-f0-9]{32})\b/i)?.[1] || '',
+  steamID: text.match(/\bsteam:\s*(\d{17})\b/i)?.[1] || '',
+  epicID: text.match(/\bepic:\s*([a-f0-9]{32})\b/i)?.[1] || null,
+});
+const getListPlayers = (
+  emitter: EventEmitter,
+  body: string,
+): TPlayer[] => {
   const players: TPlayer[] = [];
-
-  for (const line of body.split('\n')) {
+  for (const line of body
+    .split('----- Recently Disconnected Players')[0]
+    .split('\n')) {
     const match = line.match(
-      /ID: ([0-9]+) \| Online IDs: EOS: ([0-9a-f]{32}) steam: (\d{17}) \| Name: (.+) \| Team ID: ([0-9]+) \| Squad ID: ([0-9]+|N\/A) \| Is Leader: (True|False) \| Role: ([A-Za-z0-9_]*)\b/,
+      /^ID: (\d+) \| Online IDs: (.+?) \| Name: (.+?) \| Team ID: (\d+) \| (?:Party ID: ([^|]+) \| )?Squad ID: (\d+|N\/A) \| Is Leader: (True|False) \| Role: ([^|\r\n]*)(?:\| Vehicle: ([^\r\n]*))?/,
     );
     if (!match) continue;
-
+    const identity = ids(match[2]);
+    if (!identity.steamID && !identity.eosID) continue;
     players.push({
       playerID: match[1],
-      eosID: match[2],
-      steamID: match[3],
-      name: match[4],
-      teamID: match[5],
-      squadID: match[6] !== 'N/A' ? match[6] : null,
+      ...identity,
+      playerKey: identity.steamID
+        ? `steam:${identity.steamID}`
+        : `eos:${identity.eosID}`,
+      name: match[3],
+      teamID: match[4],
+      partyID:
+        match[5] && match[5].trim() !== 'N/A'
+          ? match[5].trim().replace(/^#/, '')
+          : null,
+      squadID: match[6] === 'N/A' ? null : match[6],
       isLeader: match[7] === 'True',
-      role: match[8],
+      role: match[8].trim(),
+      vehicle:
+        match[9] && match[9].trim() !== 'N/A'
+          ? match[9].trim()
+          : null,
     });
   }
-
-  rconEmitter.emit(RconEvents.LIST_PLAYERS, players);
-
+  emitter.emit(RconEvents.LIST_PLAYERS, players);
   return players;
 };
-
-const getListSquads = (rconEmitter: EventEmitter, body: string) => {
-  const squads: TSquad[] = [];
-  let teamName: string | null = null;
-  let teamID: string | null = null;
-
+const getListTeams = (emitter: EventEmitter, body: string) => {
+  const teams = [];
   for (const line of body.split('\n')) {
-    const match = line.match(
-      /ID: ([0-9]+) \| Name: (.+) \| Size: ([0-9]+) \| Locked: (True|False) \| Creator Name: (.+) \| Creator Online IDs: EOS: ([0-9a-f]{32}) steam: (\d{17})/,
+    const m = line.match(
+      /^Team ID: (\d+) \((.+)\)(?: - Tickets: (-?\d+))?\s*$/,
     );
-    const matchSide = line.match(/Team ID: (1|2) \((.+)\)/);
-
-    if (matchSide) {
-      teamID = matchSide[1];
-      teamName = matchSide[2];
+    if (m)
+      teams.push({
+        teamID: m[1],
+        teamName: m[2],
+        tickets: m[3] === undefined ? null : Number(m[3]),
+      });
+  }
+  emitter.emit(RconEvents.LIST_TEAMS, teams);
+  return teams;
+};
+const getListSquads = (
+  emitter: EventEmitter,
+  body: string,
+): TSquad[] => {
+  const squads: TSquad[] = [];
+  let teamID: string | null = null,
+    teamName: string | null = null,
+    teamTickets: number | null = null;
+  for (const line of body.split('\n')) {
+    const side = line.match(
+      /^Team ID: (\d+) \((.+)\)(?: - Tickets: (-?\d+))?\s*$/,
+    );
+    if (side) {
+      teamID = side[1];
+      teamName = side[2];
+      teamTickets = side[3] === undefined ? null : Number(side[3]);
+      continue;
     }
-
-    if (!match) continue;
-
+    const m = line.match(
+      /^ID: (\d+) \| Name: (.+?) \| Size: (\d+) \| Locked: (True|False) \| Creator Name: (.+?) \| Creator Online IDs: (.+)$/,
+    );
+    if (!m) continue;
+    const id = ids(m[6]);
     squads.push({
-      squadID: match[1],
-      squadName: match[2],
-      size: match[3],
-      locked: match[4],
-      creatorName: match[5],
-      creatorEOSID: match[6],
-      creatorSteamID: match[7],
-      teamID: teamID,
-      teamName: teamName,
+      squadID: m[1],
+      squadName: m[2],
+      size: m[3],
+      locked: m[4],
+      creatorName: m[5],
+      creatorEOSID: id.eosID,
+      creatorSteamID: id.steamID,
+      creatorEpicID: id.epicID,
+      teamID,
+      teamName,
+      teamTickets,
     });
   }
-
-  rconEmitter.emit(RconEvents.LIST_SQUADS, squads);
-
+  emitter.emit(RconEvents.LIST_SQUADS, squads);
+  getListTeams(emitter, body);
   return squads;
 };
 
 const getCurrentMap = (rconEmitter: EventEmitter, body: string) => {
-  const match = body.match(/^Current level is (.*), layer is (.*)/);
+  const match = body.match(
+    /^Current level is ([^,\r\n]*), layer is ([^,\r\n]*)/,
+  );
   let data: TMap = {
     level: null,
     layer: null,
@@ -80,7 +121,9 @@ const getCurrentMap = (rconEmitter: EventEmitter, body: string) => {
 };
 
 const getNextMap = (rconEmitter: EventEmitter, body: string) => {
-  const match = body.match(/^Next level is (.*), layer is (.*)/);
+  const match = body.match(
+    /^Next level is ([^,\r\n]*), layer is ([^,\r\n]*)/,
+  );
   let data: TMap = {
     level: null,
     layer: null,
@@ -133,6 +176,7 @@ const getServerInfo = (rconEmitter: EventEmitter, body: string) => {
 };
 
 export const helpers = {
+  getListTeams,
   getListPlayers,
   getListSquads,
   getCurrentMap,

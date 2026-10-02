@@ -28,6 +28,10 @@ export type TRconResponse = {
 };
 
 export type TPlayer = {
+  playerKey?: string;
+  partyID?: string | null;
+  vehicle?: string | null;
+  epicID?: string | null;
   playerID: string;
   eosID: string;
   steamID: string;
@@ -39,6 +43,8 @@ export type TPlayer = {
 };
 
 export type TSquad = {
+  teamTickets?: number | null;
+  creatorEpicID?: string | null;
   squadID: string;
   squadName: string;
   size: string;
@@ -143,3 +149,9 @@ export enum ERconResponseType {
   SERVERDATA_SERVER = 0x01,
   SERVERDATA_RESPONSE = 0x00,
 }
+
+export type TTeam = {
+  teamID: string;
+  teamName: string;
+  tickets: number | null;
+};
